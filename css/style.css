@@ -1,0 +1,54 @@
+html, body, div, p, input {
+	margin: 0;
+	padding: 0;
+}
+
+html, body, #wrap {
+	width: 100%;
+	height: 100%;
+}
+
+body {
+	background-color: black;
+	font-family: 'Courier New';
+	font-size: 14px;
+	color: #AAA;
+}
+
+pre {
+	margin: 0;
+}
+
+.log .lines p, .log .inputline {
+	padding-left: 2px;
+}
+
+.log .lines p.me {
+	color: white;
+}
+
+.log .inputline {
+	color: white;
+	overflow:hidden;
+	max-height: 1.2em;
+}
+
+.log .maininput {
+	font-family: 'Courier New';
+	font-size: 14px;
+	background-color: transparent;
+	color: white;
+	margin: 0;
+	width: 500px;
+	max-height: 1.2em;
+	border: 0;
+	display: inline-block;
+	outline: none;
+}
+
+.bad { color: red; }
+.ok { color: #AFA; }
+.unknown { color: #FA5; }
+.important { color: #AAF; }
+
+.log .prompt { margin-right: -1px; color: #0F0 }
