@@ -2,28 +2,32 @@
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1" />
+<meta name='viewport' content='width=device-width, user-scalable=no' />
+<META HTTP-EQUIV="CACHE-CONTROL" CONTENT="NO-CACHE" />
 
-<meta property="og:title" content="tamats.com" />
+<link rel="apple-touch-icon-precomposed" href="imgs/ipad_icon.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
 
-<title>IP.OS</title>
+<meta property="og:title" content="liteos.js" />
+<style>html,body{background-color: "black";}</style>
+
+<title>Lite.OS</title>
 	<style type='text/css'></style>
 	<link rel="stylesheet" type="text/css" href="css/style.css">
 </head>
 
 <body>
 <div id="wrap">
-	<div id="mainlog" class="log">
-		<div class="lines"></div>
-		<p class="inputline"><span class="prompt">&gt;</span><input class="maininput" type="text" value="" autofocus /></p>
-	</div>
+	<div id="mainlog" class="log"></div>
+	<div id="backlog" class="log"></div>
 </div>
 
 <script type="text/javascript" src="js/extra/jquery.js"></script>
+
+<script type="text/javascript" src="js/config.js"></script>
 <script type="text/javascript" src="js/terminal.js"></script>
 <script type="text/javascript" src="js/os.js"></script>
 <script type="text/javascript" src="js/code.js"></script>
-<script type="text/javascript" src="js/applib.js"></script>
 
-<script>APP.init();</script>
 </body>
 </html>

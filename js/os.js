@@ -1,28 +1,49 @@
+
 var OS = {
 	ready: false,
 	server_url: "ajax.php",
 	modules: {},
 	registered_commands: {},
 	registered_envvars: {},
-	registered_apps: {},
+	registered_apps: {}, //name: "url.js"
 
 	current_process: null,
-	fg_process_stack: [],
-	bg_process_stack: [],
-	last_process_id: 0,
+	processes: [],
+	processes_by_pid: {},
+	last_process_pid: 0,
 
 	init: function(on_ready)
 	{
 		if(this.ready) throw("already init");
-		OS.loadModulesFromList("default_modules.txt", on_ready );
 
-		TERM.stdin = this.stdin.bind(this);
-		TERM.keyHandler = this.keyHandler.bind(this);
+		//system apps
+		for(var i in config.shell_apps)
+			OS.registerSystemApp(config.shell_apps[i],i);
+
+		//load modules
+		OS.loadModules(config.default_modules, inner_load_daemons );
+
+		//launch daemons
+		function inner_load_daemons()
+		{
+			if(config.init_seq)
+				for(var i in config.init_seq)
+					this.command(config.init_seq[i]);
+
+			if(on_ready)
+				on_ready();
+		}
 	},
 
-	stdin: function(cmd)
+	connectTerminal: function(t)
 	{
-		this.command(cmd);
+		t.stdin = this.stdin.bind(this);
+		t.keyHandler = this.keyHandler.bind(this);
+	},
+
+	stdin: function(cmd, ctx)
+	{
+		this.command(cmd, ctx);
 	},
 
 	keyHandler: function(e)
@@ -31,108 +52,95 @@ var OS = {
 		{
 			this.kill( this.current_process );
 			console.out("process halted");
+			e.stopPropagation();
+			e.preventDefault();
 			return true;
 		}
 	},
 
-	command: function(cmd)
+	command: function(cmd, ctx)
 	{
 		//app
 		if(this.current_process && this.current_process.stdin)
 			return this.current_process.stdin(cmd);
 
 		//bash
-		if(cmd == "")
+		if(cmd.trim() == "")
 			console.out("");
-		else if(cmd[0] == ".")
-			this.executeRequest(cmd);
 		else
 			this.executeCommand(cmd);
 	},
 
-	executeCommand: function(cmd)
+	executeCommand: function(fullcmd)
 	{
-		var tokens = cmd.split(" ");
-		if( this.registered_apps[ tokens[0] ] )
-		{
-			var app_class = this.registered_apps[ tokens[0] ];
-			this.exec( tokens[0], tokens);
-			return;
-		}
-		var cmd_info = this.registered_commands[ tokens[0] ];
-		if(!cmd_info)
-			console.out(cmd + ": <span class='unknown'>command not found</span>");
-		else
-			cmd_info.callback(cmd, tokens);
-	},
+		var pipes = fullcmd.split("|");
 
-	executeRequest: function(cmd)
-	{
-		var tokens = cmd.substr(1).split(" ");
-		var action = tokens[0];
-		TERM.enable(false);
-		$.ajax({ 
-			url: this.server_url,
-			data:{action:action, params: tokens.slice(1).join(" ")},
-			method:"POST",
-			dataType: "json"})
-		.done(function(v){
-			if(!v.type || v.type == "text")
-				console.out(v.msg);
+		var prev_proc = null;
+		var app = null;
+
+		for(var i in pipes)
+		{
+			if(!pipes[i]) continue;
+			var cmd = pipes[i].trim();
+			var tokens = cmd.split(" ");
+			var last = tokens[ tokens.length - 1].trim();
+			var bg = false;
+			if( last == "&" )
+				bg = true;
+
+			//apps
+			if( this.registered_apps[ tokens[0] ] )
+			{
+				app = this.registered_apps[ tokens[0] ];
+				if(typeof(app) == "string") //remote
+					app = this.launchSafeApp( app, tokens.join(" "), tokens[0], true );
+				else
+					app = this.exec( tokens[0], tokens);
+			}
 			else
-				console.out("<span class='unknown'>DONE</span>");
-			TERM.enable(true);
-		})
-		.fail(function(v){
-			console.out("<span class='bad'>ERROR</span>");
-			TERM.enable(true);
-		});
+			{
+				//local commands
+				var cmd_info = this.registered_commands[ tokens[0] ];
+				if(!cmd_info)
+					console.out(cmd + ": <span class='unknown'>command not found</span>");
+				else
+					cmd_info.callback(cmd, tokens);
+				continue;
+			}
+
+			if(prev_proc)
+				prev_proc.pipe_to = app;
+			prev_proc = app;
+		}
 	},
 	
 	_pending_modules: [],
 
-	loadModulesFromList: function(url, on_complete)
+	loadModules: function(modules, on_complete)
 	{
-		var that = this;
-		var loading = console.out("Loading modules list... ");
-		console.lock();
-		this.all_modules_loaded = function(){
-			that.all_modules_loaded = null;
-			if(on_complete)
-				on_complete();
-		};
-
-		var nocache = "?" + new Date().getTime();
-
-		$.get(url + nocache)
-		.done( function(response) {
-			console.out("<span class='ok'>OK</span>", {append:true} );
-			var l = response.split("\n");
-			for(var i in l)
-			{
-				var name = l[i].trim();
-				if(name[0] != "#")
-					that._pending_modules.push(name);
-			}
-			that._processPendingModules();
-		})
-		.fail(function(err) {
-			console.out("<span class='bad'>ERROR</span>", {append:true} );
-		});
+		for(var i in modules)
+		{
+			var url = modules[i];
+			var nocache = (url.indexOf("?") == -1 ? "?" : "&") + "nocache=" + new Date().getTime();
+			url += nocache;
+			this._pending_modules.push(url);
+		}
+		this.all_modules_loaded = on_complete;
+		this._processPendingModules();
 	},
 
 	_processPendingModules: function()
 	{
-		if(OS._pending_modules.length == 0)
+		if(this._pending_modules.length == 0)
 		{
-			console.out("All modules loaded" );
-			if(OS.all_modules_loaded)
-				OS.all_modules_loaded();
+			//console.out("All modules loaded" );
+			if(this.all_modules_loaded)
+				this.all_modules_loaded();
 			return;
 		}
 
-		var url = OS._pending_modules.shift();
-		OS.loadModule(url, OS._processPendingModules );
+		var url = this._pending_modules.shift();
+		this.loadModule(url, this._processPendingModules.bind(this) );
 	},
 
 	loadModule: function(url, on_complete, name)
@@ -162,57 +170,181 @@ var OS = {
 		});
 	},
 
+	registerModule: function(name, module )
+	{
+		this.modules[name] = module;
+	},	
+
 	valid_safe_instances: {"console":true},
 
+	/*
 	launchApp: function(url, argv)
 	{
 		var nocache = "?" + new Date().getTime();
+		var app_context = { url: url };
+
 		getText(url + nocache)
-		.done( function(txt) {
+		.done( function(code) {
 			try
 			{
-				eval(txt);
+				window._context = app_context;
+				window.self = app_context;
+				eval("(function() { var self = window._context;\n" + code + "\n})();");
+				window._context = window.self = null;
 			}
 			catch (err)
 			{
 				return console.out("ERROR in APP: " + err,{color:"red"});
 			}
-			var app_class = window.app_className;
+
+			var app_class = app_context.app_className;
 			if(!app_class) 
 			{
-				console.out("app not found: " + app_name,{className:"bad"});
+				console.out("app not found: " + url,{className:"bad"});
 				return null;
 			}
 
 			TERM.prompt("");
-			var app = new app_class(argv);
+			var app = new app_class(argv.split(" "), argv);
 			if(!app.appname) app.appname = url;
-			if(!app.exit) app.exit = function(errcode) { 
-				OS.kill( this, errcode );
-			}
+			if(!app.exit)
+				app.exit = function(errcode) { 
+					OS.kill( this, errcode );
+				}
 
 			OS.registerProcess( app );
 		});
-	},
 
-	launchSafeApp: function(url)
+		return app_context;
+	},
+	*/
+
+	launchSafeApp: function(url, argv, appname, in_background)
 	{
 		var nocache = "?" + new Date().getTime();
 		var app_worker = new Worker(url + nocache);
+		app_worker.state = 1;
+		app_worker.name = appname;
+		app_worker.url = url;
 		app_worker.addEventListener("message", this.onWorkerAppEvent.bind(app_worker), false);
 		app_worker.stdin = function(msg)
 		{
-			console.lock();
-			APP._waiting_ready = true;
+			//console.lock();
+			//APP._waiting_ready = true;
 			app_worker.postMessage( {action:"stdin", text: msg });
 		}
 		app_worker.exit = function()
 		{
-			this.terminate();
+			this.postMessage( {action:"exit"});
 		}
 
+		app_worker.kill = function()
+		{
+			this.state = 0;
+			this.terminate();
+			OS.removeProcess(this);
+			console.log("killed");
+		}
+
+		app_worker.stdout = function(msg,options)
+		{
+			if(this.pipe_to)
+				this.pipe_to.stdin(msg,options);
+			else
+				console.out(msg, options);
+		}
+
+		app_worker.callResponse = function(callid, data)
+		{
+			app_worker.postMessage({ callid: callid, ret: data });
+		}
+
+
 		this.registerProcess( app_worker );
-		app_worker.postMessage( {action:"launch" });
+		app_worker.postMessage( {action:"launch", argv: argv || ""});
+		if(!in_background)
+			this.current_process = app_worker;
+
+		return app_worker;
+	},
+
+	onWorkerAppEvent: function(e)
+	{
+		if(!e.data) return;
+		var data = e.data;
+
+		if(data.module)
+		{
+			var module = OS.modules[data.module];
+			if(module)
+			{
+				var ret = null;
+				if(data.method && module["@" + data.method ])
+					ret = module[data.method].apply(module, data.params || [] );
+				else if(data.action && module.onProcessAction)
+					ret = module.onProcessAction(this, data.action, data.params );
+				else
+				{
+					console.error("Module do not support actions");
+					return;
+				}
+				if(data._callid)
+					this.callResponse(data._callid, ret);
+			}
+			else
+				console.error("Module not found: " + data.module);
+			return;
+		}
+
+		if(data.action == "eval")
+		{
+			//safe checking
+			if(!OS.valid_safe_instances[ data.instance ])
+				return console.error("action not safe");
+
+			if(data.instance == "console" && data.method == "out")
+				return this.stdout.apply( this, data.params );
+
+			if(!window[ data.instance ])
+				return console.error("Instance not found", data.instance);
+			var instance = window[ data.instance ];
+			if(!instance[ data.method ])
+				return console.error("Instance method not found", data.instance, data.method );
+			var method = instance[ data.method ];
+			if(typeof(method) != "function")
+				return console.error("Instance method not a function", data.instance, data.method );
+
+			if(data.params && data.params.constructor == Array)
+				method.apply( instance, data.params );
+			else
+				method.call( instance, data.params );
+		}
+		else if(data.action == "out")
+		{
+			if(data.params)
+				return this.stdout.apply( this, data.params );
+			return this.stdout.call( this, data.params );
+		}
+		else if(data.action == "sys")
+		{
+			if(data.info == "ready" && APP._waiting_ready)
+			{
+				console.unlock();
+				APP._waiting_ready = false;
+			}
+		}
+		else if(data.action == "onexit")
+		{
+			OS.kill( this );
+		}
+		else if(data.action == "finish")
+		{
+			OS.kill( this );
+		}
+		else if(data.action == "input")
+		{
+			//TODO
+		}
 	},
 
 	exec: function( app_name, argv )
@@ -237,63 +369,40 @@ var OS = {
 
 	registerProcess: function( process )
 	{
-		process._pid = this.last_process_id++;
+		process._pid = this.last_process_pid++;
 		process._starttime = new Date().getTime();
-		this.fg_process_stack.push(process);
-		this.current_process = process;
+		this.processes.push(process);
+		this.processes_by_pid[ process._pid ] = process;
 	},
 
-	kill: function( app, errcode )
+	removeProcess: function(process)
 	{
-		var pos = OS.fg_process_stack.indexOf( app );
+		var pos = this.processes.indexOf( process );
 		if(pos == -1) return;
-		OS.fg_process_stack.splice(pos,1);
-		if(	OS.current_process == app )
-			OS.current_process = OS.fg_process_stack[ OS.fg_process_stack.length - 1 ];
 
-		if(errcode)
-			console.out("exited with code " + errcode );
+		this.processes.splice(pos,1);
+		delete this.processes_by_pid[ process._pid ];
 
-		if(app.exit)
-			app.exit();
+		if(this.current_process == this)
+			this.current_process = null;
 
-		if(OS.fg_process_stack.length == 0)
+		if(this.processes.length == 0)
 			TERM.prompt("]");
 	},
 
-	onWorkerAppEvent: function(e)
+	kill: function( process )
 	{
-		if(!e.data) return;
-		var data = e.data;
-
-		if(data.action == "eval")
-		{
-			//safe checking
-			if(!OS.valid_safe_instances[ data.instance ])
-				return console.error("App Not safe");
-			if(!window[ data.instance ])
-				return console.error("Instance not found", data.instance);
-			var instance = window[ data.instance ];
-			if(!instance[ data.method ])
-				return console.error("Instance method not found", data.instance, data.method );
-			var method = instance[ data.method ];
-			if(typeof(method) != "function")
-				return console.error("Instance method not a function", data.instance, data.method );
-			if(data.params && data.params.constructor == Array)
-				method.apply( instance, data.params );
-			else
-				method.call( instance, data.params );
-		}
-		else if(data.action == "sys")
-		{
-			if(data.info == "ready" && APP._waiting_ready)
-			{
-				console.unlock();
-				APP._waiting_ready = false;
-			}
-		}
+		//terminate
+		if(process.kill)
+			process.kill();
 	},
 
+	getProcess: function( pid )
+	{
+		return this.processes_by_pid[pid];
+	},
+
+	//regsiter shortcuts for commands
 	registerSystemApp: function(app, name)
 	{
 		this.registered_apps[ name || getClassName(app) ] = app;
@@ -307,20 +416,34 @@ var OS = {
 	}
 };
 
+//sys commands
 OS.registerCommand("ps", function(cmd, tokens) {
 	var output = "PID TIME     CMD\n";
 	var now = new Date().getTime();
 	var time = new Date();
-	for(var i in OS.fg_process_stack)
+	for(var i in OS.processes)
 	{
-		var process = OS.fg_process_stack[i];
+		var process = OS.processes[i];
 		time.setTime( now - process._starttime);
-		var str = process._pid + "   " + time.toTimeString().substr(0,8) + " " + process.appname + "\n";
+		var str = process._pid + "   " + time.toTimeString().substr(0,8) + " " + process.name + "\n";
 		if(OS.current_process == process)
 			str = "<span style='color:white'>" + str + "</span>";
 		output += str;
 	}
 	console.out(output);
+	return true;
+});
+
+//sys commands
+OS.registerCommand("kill", function(cmd, tokens) {
+	var proc = OS.getProcess(tokens[1]);
+	if(proc)
+	{
+		OS.kill(proc);
+		console.out("Process killed");
+	}
+	else
+		console.out("Process not found");
 	return true;
 });
 
